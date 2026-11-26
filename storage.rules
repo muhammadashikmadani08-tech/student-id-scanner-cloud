@@ -1,0 +1,28 @@
+rules_version = '2';
+
+// Firebase Storage security rules for Student ID Scanner Cloud.
+//
+// Student photos live at users/{userId}/photos/{studentId}.jpg. A
+// signed-in user may only read, upload, or delete photos inside their
+// OWN userId folder. Unauthenticated access is denied everywhere.
+// Uploads are capped at 5 MB each (the size check applies to writes
+// only: request.resource is null on reads, so read and write are
+// separate statements).
+//
+// Paste these rules into Firebase console > Storage > Rules, then
+// Publish.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /users/{userId}/photos/{fileName} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.size < 5 * 1024 * 1024;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
