@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "94655255794",
+    "project_id": "student-id-scanner-cloud",
+    "storage_bucket": "student-id-scanner-cloud.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:94655255794:android:282b79309f1c7cfc60ec6b",
+        "android_client_info": {
+          "package_name": "com.institution.idscanner.cloud"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "94655255794-e4et46a683bvjptthc534c5ei9pm0rce.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAu7RXAlABcA5-4mbSSYTTQjLB0G_ozYs0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "94655255794-e4et46a683bvjptthc534c5ei9pm0rce.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
