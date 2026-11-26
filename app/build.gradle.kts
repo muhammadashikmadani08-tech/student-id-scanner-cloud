@@ -21,7 +21,25 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Fixed debug keystore committed in keystore/debug.keystore so every
+    // build (including GitHub Actions) signs with the SAME SHA-1. That
+    // fingerprint must be registered in Firebase console for Google
+    // sign-in (error code 10 = DEVELOPER_ERROR otherwise). This is a
+    // DEBUG keystore with the standard public debug credentials — it is
+    // safe to commit and must never be used for a release build.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = rootProject.file("keystore/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
