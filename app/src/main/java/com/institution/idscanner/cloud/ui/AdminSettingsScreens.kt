@@ -1,0 +1,171 @@
+package com.institution.idscanner.cloud.ui
+
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.dp
+import com.institution.idscanner.cloud.AppViewModel
+import com.institution.idscanner.cloud.util.CsvUtil
+import kotlinx.coroutines.launch
+
+@Composable
+fun AdminScreen(
+    vm: AppViewModel,
+    onStudents: () -> Unit,
+    onAdd: () -> Unit,
+    onSettings: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val pin by vm.adminPin.collectAsState()
+    var entered by remember { mutableStateOf("") }
+    var unlocked by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf("") }
+    val students by vm.students.collectAsState()
+
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) scope.launch {
+            runCatching {
+                context.contentResolver.openInputStream(uri)?.use { vm.importStudents(CsvUtil.parse(it)) }
+                message = "CSV import সম্পন্ন হয়েছে। ডাটা ক্লাউডে জমা হয়েছে।"
+            }.onFailure { message = "Import ব্যর্থ: ${it.message}" }
+        }
+    }
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri: Uri? ->
+        if (uri != null) scope.launch {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use {
+                    it.write(CsvUtil.toCsv(students).toByteArray(Charsets.UTF_8))
+                }
+                message = "CSV export সম্পন্ন হয়েছে।"
+            }.onFailure { message = "Export ব্যর্থ: ${it.message}" }
+        }
+    }
+
+    Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
+        Text("Admin Section", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(12.dp))
+        if (!unlocked) {
+            Text("Admin PIN দিন (ডিফল্ট: 1234)। Settings থেকে PIN বদলানো যায়।")
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = entered, onValueChange = { entered = it },
+                label = { Text("PIN") },
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = { unlocked = entered == pin; if (!unlocked) message = "ভুল PIN।" },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Unlock করুন") }
+            if (message.isNotBlank()) { Spacer(Modifier.height(8.dp)); Text(message) }
+        } else {
+            Button(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("Add Student") }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = onStudents, modifier = Modifier.fillMaxWidth()) { Text("Students দেখুন / Edit / Delete") }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = { importLauncher.launch(arrayOf("text/csv", "text/comma-separated-values", "*/*")) }, modifier = Modifier.fillMaxWidth()) {
+                Text("CSV/Excel (CSV) থেকে Import করুন")
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = { exportLauncher.launch("students.csv") }, modifier = Modifier.fillMaxWidth()) {
+                Text("CSV-এ Export করুন")
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = onSettings, modifier = Modifier.fillMaxWidth()) {
+                Text("প্রতিষ্ঠানের নাম ও PIN পরিবর্তন করুন")
+            }
+            if (message.isNotBlank()) { Spacer(Modifier.height(10.dp)); Text(message) }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "এই ক্লাউড ভার্সনে ডাটা Firebase-এ জমা থাকে, তাই আলাদা Database Backup/Restore লাগে না — একই Gmail দিয়ে লগইন করলেই সব ফোনে একই ডাটা পাওয়া যায়। Excel ফাইল সরাসরি নয় — Excel-এ File > Save As > CSV UTF-8 করে import করুন।",
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+    }
+}
+
+@Composable
+fun SettingsScreen(vm: AppViewModel, onDone: () -> Unit) {
+    val institutionName by vm.institutionName.collectAsState()
+    val pin by vm.adminPin.collectAsState()
+    val signedInEmail by vm.currentUserEmail.collectAsState()
+    var name by remember { mutableStateOf("") }
+    var newPin by remember { mutableStateOf("") }
+    var first by remember { mutableStateOf(true) }
+    if (first && institutionName.isNotBlank()) { name = institutionName; first = false }
+
+    Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
+        Text("Settings", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(12.dp))
+        Text("লগইন করা অ্যাকাউন্ট (এই অ্যাকাউন্টের ডাটাই দেখা যাচ্ছে):")
+        Spacer(Modifier.height(4.dp))
+        Text(
+            if (signedInEmail.isBlank()) "লগইন করা হয়নি" else signedInEmail,
+            style = MaterialTheme.typography.titleMedium
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "অ্যাকাউন্ট বদলাতে লগআউট করে অন্য Gmail দিয়ে লগইন করুন। প্রতিটি Gmail-এর ডাটা সম্পূর্ণ আলাদা থাকে।",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(Modifier.height(16.dp))
+        Text("প্রতিষ্ঠানের নাম (Home Screen-এ দেখাবে; Logo বদলাতে res/drawable-এর আইকন বদলান — README দেখুন)।")
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("প্রতিষ্ঠানের নাম") }, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(12.dp))
+        Text("বর্তমান Admin PIN: $pin")
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = newPin, onValueChange = { newPin = it }, label = { Text("নতুন PIN (4 সংখ্যা)") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+            visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(14.dp))
+        Button(
+            onClick = {
+                if (name.isNotBlank()) vm.setInstitutionName(name.trim())
+                if (newPin.length >= 4) vm.setAdminPin(newPin.trim())
+                onDone()
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Save করুন") }
+        Spacer(Modifier.height(16.dp))
+        OutlinedButton(
+            onClick = { vm.signOut() },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("লগআউট করুন (Google)") }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "লগআউট করলে ফোনের ডাটা মুছে যায় না — আবার লগইন করলে ক্লাউড থেকে সব ফিরে আসবে।",
+            style = MaterialTheme.typography.bodyMedium
+        )
+    }
+}
