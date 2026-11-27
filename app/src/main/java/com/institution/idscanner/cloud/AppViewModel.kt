@@ -8,6 +8,7 @@ import com.institution.idscanner.cloud.auth.AuthManager
 import com.institution.idscanner.cloud.data.AttendanceRecord
 import com.institution.idscanner.cloud.data.CloudRepository
 import com.institution.idscanner.cloud.data.CloudSettings
+import com.institution.idscanner.cloud.data.Holiday
 import com.institution.idscanner.cloud.data.ScanHistory
 import com.institution.idscanner.cloud.data.Student
 import com.institution.idscanner.cloud.util.LogoStore
@@ -29,6 +30,9 @@ class AppViewModel(
     val students: StateFlow<List<Student>> = repo.allStudents
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val history: StateFlow<List<ScanHistory>> = repo.history
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    /** Live list of holidays (users/{uid}/holidays), oldest date first. */
+    val holidays: StateFlow<List<Holiday>> = repo.holidays
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val institutionName = settings.institutionName
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
@@ -70,6 +74,9 @@ class AppViewModel(
     /** Attendance records for one student, oldest first. */
     fun attendanceFor(studentId: String): Flow<List<AttendanceRecord>> =
         repo.attendanceFor(studentId)
+
+    /** Every attendance record, for CSV export (one-shot read). */
+    suspend fun getAllAttendance(): List<AttendanceRecord> = repo.getAllAttendance()
 
     suspend fun markAttendance(studentId: String) {
         repo.markAttendance(studentId)
@@ -116,6 +123,9 @@ class AppViewModel(
     fun importStudents(list: List<Student>) = viewModelScope.launch { repo.upsertAll(list) }
     fun deleteHistory(id: String) = viewModelScope.launch { repo.deleteHistory(id) }
     fun clearHistory() = viewModelScope.launch { repo.clearHistory() }
+    /** Adds/overwrites one holiday (date "yyyy-MM-dd", validated by the UI). */
+    fun addHoliday(holiday: Holiday) = viewModelScope.launch { repo.addHoliday(holiday) }
+    fun deleteHoliday(date: String) = viewModelScope.launch { repo.deleteHoliday(date) }
     fun setInstitutionName(name: String) = viewModelScope.launch { settings.setInstitutionName(name) }
     fun setAdminPin(pin: String) = viewModelScope.launch { settings.setAdminPin(pin) }
 
