@@ -138,23 +138,25 @@ class CloudRepository(val uid: String) {
                 ?: savePhotoLocally(student.studentId, newPhotoUri, context)
             if (url != null) toSave = student.copy(photoUrl = url)
         }
-        // Capture the previously stored phone BEFORE overwriting, so a
-        // phone change can move the guardian link (see below). A failed
-        // read must not block the save: fall back to "no previous phone"
-        // and still add the new link.
-        val previousPhone = runCatching { getStudent(toSave.studentId)?.phone }.getOrNull()
+        // Capture the previously stored phone AND guardian email BEFORE
+        // overwriting, so a phone/email change can move the guardian
+        // links (see below). A failed read must not block the save:
+        // fall back to "no previous phone/email" and still add the new
+        // links.
+        val previous = runCatching { getStudent(toSave.studentId) }.getOrNull()
         studentsRef().document(toSave.studentId).set(toSave).await()
-        syncGuardianLinkOnSave(toSave, previousPhone)
+        syncGuardianLinkOnSave(toSave, previous?.phone, previous?.guardianEmail)
         return toSave
     }
 
     suspend fun upsertAll(students: List<Student>) {
-        // Capture each student's previously stored phone BEFORE the
-        // batch overwrites, so phone changes move the guardian links.
-        // A failed read must not block the import: that student is then
-        // treated as new (its new link is still added).
+        // Capture each student's previously stored phone AND guardian
+        // email BEFORE the batch overwrites, so phone/email changes
+        // move the guardian links. A failed read must not block the
+        // import: that student is then treated as new (its new links
+        // are still added).
         val withPrevious = students.map { student ->
-            student to runCatching { getStudent(student.studentId)?.phone }.getOrNull()
+            student to runCatching { getStudent(student.studentId) }.getOrNull()
         }
         // WriteBatch caps at 500 writes; chunk larger imports.
         withPrevious.chunked(400).forEach { chunk ->
@@ -162,18 +164,19 @@ class CloudRepository(val uid: String) {
             chunk.forEach { (student, _) -> batch.set(studentsRef().document(student.studentId), student) }
             batch.commit().await()
         }
-        withPrevious.forEach { (student, previousPhone) ->
-            syncGuardianLinkOnSave(student, previousPhone)
+        withPrevious.forEach { (student, previous) ->
+            syncGuardianLinkOnSave(student, previous?.phone, previous?.guardianEmail)
         }
     }
 
     suspend fun delete(student: Student, context: Context? = null) {
-        // Use the stored phone (authoritative) when it can be read, so
-        // the guardian link is cleaned up even if the passed-in copy is
-        // stale; fall back to the passed-in phone.
-        val storedPhone = runCatching { getStudent(student.studentId)?.phone }.getOrNull()
+        // Use the stored phone/email (authoritative) when they can be
+        // read, so the guardian links are cleaned up even if the
+        // passed-in copy is stale; fall back to the passed-in values.
+        val stored = runCatching { getStudent(student.studentId) }.getOrNull()
         studentsRef().document(student.studentId).delete().await()
-        removeFromGuardianLink(normalizeGuardianPhone(storedPhone ?: student.phone), student.studentId)
+        removeFromGuardianLink(normalizeGuardianPhone(stored?.phone ?: student.phone), student.studentId)
+        removeFromGuardianEmailLink(normalizeGuardianEmail(stored?.guardianEmail ?: student.guardianEmail), student.studentId)
         deletePhoto(student, context)
     }
 
@@ -285,12 +288,20 @@ class CloudRepository(val uid: String) {
         holidaysRef().document(date.trim()).delete().await()
     }
 
-    // ---- Guardian links (users/{uid}/guardianLinks/{E.164 phone}) ----
+    // ---- Guardian links (users/{uid}/guardianLinks/{E.164 phone or email}) ----
     //
-    // Kept in sync with Student.phone by every save/delete path in this
-    // repository (upsert, upsertAll, delete, and the first-login seed in
-    // ensureProfile). No student, attendance or history schema changes:
-    // the link doc only mirrors {phone, studentIds[]}.
+    // Phone-keyed links are kept in sync with Student.phone by every
+    // save/delete path in this repository (upsert, upsertAll, delete,
+    // and the first-login seed in ensureProfile). No student,
+    // attendance or history schema changes: the phone link doc only
+    // mirrors {phone, studentIds[]}.
+    //
+    // Email-keyed links are written IN ADDITION to the phone-keyed
+    // doc whenever Student.guardianEmail is non-empty: doc id = the
+    // lowercased, trimmed email, mirroring {email, studentIds[],
+    // phone}. They are kept in sync by the same save/delete paths.
+    // Pre-existing students gain an email link only when next
+    // saved/edited/imported — there is no backfill.
 
     /**
      * Keeps the guardian link(s) correct after a student save.
@@ -298,8 +309,14 @@ class CloudRepository(val uid: String) {
      * new student): when it differs from the new phone, the student id
      * is removed from the old phone's link and added to the new one.
      * A blank new phone only removes the old link.
+     *
+     * [previousEmail] is the guardian email stored before this save:
+     * the same move/add/remove logic runs for the email-keyed link,
+     * in addition to the phone link above. Re-adding to the (possibly
+     * unchanged) email link on every save also refreshes its stored
+     * phone when the phone changes.
      */
-    private suspend fun syncGuardianLinkOnSave(student: Student, previousPhone: String?) {
+    private suspend fun syncGuardianLinkOnSave(student: Student, previousPhone: String?, previousEmail: String? = null) {
         val oldPhone = normalizeGuardianPhone(previousPhone)
         val newPhone = normalizeGuardianPhone(student.phone)
         if (oldPhone != null && oldPhone != newPhone) {
@@ -307,6 +324,14 @@ class CloudRepository(val uid: String) {
         }
         if (newPhone != null) {
             addToGuardianLink(newPhone, student.studentId)
+        }
+        val oldEmail = normalizeGuardianEmail(previousEmail)
+        val newEmail = normalizeGuardianEmail(student.guardianEmail)
+        if (oldEmail != null && oldEmail != newEmail) {
+            removeFromGuardianEmailLink(oldEmail, student.studentId)
+        }
+        if (newEmail != null) {
+            addToGuardianEmailLink(newEmail, student.studentId, newPhone ?: student.phone.trim())
         }
     }
 
@@ -338,6 +363,56 @@ class CloudRepository(val uid: String) {
         val snap = ref.get().await()
         val remaining = snap.get("studentIds") as? List<*>
         if (!snap.exists() || remaining.isNullOrEmpty()) {
+            ref.delete().await()
+        }
+    }
+
+    // ---- Email-keyed guardian links (users/{uid}/guardianLinks/{email}) ----
+    //
+    // Written IN ADDITION to the phone-keyed doc above, never instead
+    // of it. The phone-keyed functions are unchanged.
+
+    /** Merges [studentId] into the link doc for [email], creating the
+     *  doc ({email, studentIds[], phone}) when it does not exist yet.
+     *  arrayUnion merges with existing ids and never overwrites them,
+     *  so re-saving the same student — or another student sharing the
+     *  email — is safe. [phone] is the guardian phone when one is
+     *  known; it is omitted when blank so a phone-less save cannot
+     *  erase a phone stored by another student sharing this email. */
+    private suspend fun addToGuardianEmailLink(email: String, studentId: String, phone: String) {
+        val data = mutableMapOf<String, Any>(
+            "email" to email,
+            "studentIds" to FieldValue.arrayUnion(studentId)
+        )
+        if (phone.isNotBlank()) data["phone"] = phone
+        guardianLinksRef().document(email).set(data, SetOptions.merge()).await()
+    }
+
+    /** Removes [studentId] from the link doc for [email]. The doc is
+     *  deleted only when its studentIds array becomes empty AND no
+     *  other student still links that email (checked by querying
+     *  students with the same guardianEmail). If that check fails,
+     *  the doc is left in place rather than risk deleting a link
+     *  another student still needs. A missing doc is not an error. */
+    private suspend fun removeFromGuardianEmailLink(email: String?, studentId: String) {
+        if (email.isNullOrBlank()) return
+        val ref = guardianLinksRef().document(email)
+        try {
+            ref.update("studentIds", FieldValue.arrayRemove(studentId)).await()
+        } catch (_: Exception) {
+            // No such link doc: nothing to remove.
+            return
+        }
+        val snap = ref.get().await()
+        val remaining = snap.get("studentIds") as? List<*>
+        if (snap.exists() && !remaining.isNullOrEmpty()) return
+        val otherStudentStillLinks = runCatching {
+            studentsRef().whereEqualTo("guardianEmail", email).get().await()
+                .documents.any { it.id != studentId }
+        }.getOrNull()
+        // Delete only on a confirmed "no other student links it".
+        // A failed/unknown check (null) leaves the doc in place.
+        if (otherStudentStillLinks == false) {
             ref.delete().await()
         }
     }
@@ -397,6 +472,21 @@ class CloudRepository(val uid: String) {
                 )
             }
         }
+        // Seed email-keyed guardian links the same way, in addition to
+        // the phone links above. No demo student has a guardianEmail
+        // today, so this writes nothing; it stays in sync if demo data
+        // ever gains emails.
+        demo.groupBy { normalizeGuardianEmail(it.guardianEmail) }.forEach { (email, students) ->
+            if (email != null) {
+                val seedData = mutableMapOf<String, Any>(
+                    "email" to email,
+                    "studentIds" to FieldValue.arrayUnion(*students.map { it.studentId }.toTypedArray())
+                )
+                students.mapNotNull { normalizeGuardianPhone(it.phone) }.firstOrNull()
+                    ?.let { seedData["phone"] = it }
+                batch.set(guardianLinksRef().document(email), seedData, SetOptions.merge())
+            }
+        }
         batch.commit().await()
     }
 
@@ -422,6 +512,23 @@ class CloudRepository(val uid: String) {
             val cleaned = raw?.trim()?.replace(" ", "")?.replace("-", "") ?: return null
             if (cleaned.isBlank()) return null
             if (cleaned.startsWith("01")) return "+880" + cleaned.substring(1)
+            return cleaned
+        }
+
+        /**
+         * Normalises a guardian email for use as a guardianLinks
+         * document id and in the link's email field: trimmed and
+         * lowercased. Returns null for a blank value or a value that
+         * is not a plausible address (no "@", or no "." after the
+         * "@"), so an invalid email never creates a link doc. This
+         * mirrors the student form's validation.
+         */
+        fun normalizeGuardianEmail(raw: String?): String? {
+            val cleaned = raw?.trim()?.lowercase() ?: return null
+            if (cleaned.isBlank()) return null
+            val atIndex = cleaned.indexOf("@")
+            if (atIndex <= 0) return null
+            if (cleaned.indexOf(".", atIndex) <= atIndex + 1) return null
             return cleaned
         }
     }
