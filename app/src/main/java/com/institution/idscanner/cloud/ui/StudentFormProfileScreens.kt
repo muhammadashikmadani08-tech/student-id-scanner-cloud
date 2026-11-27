@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -23,6 +24,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.institution.idscanner.cloud.AppViewModel
 import com.institution.idscanner.cloud.data.Student
@@ -69,7 +71,18 @@ fun StudentFormScreen(vm: AppViewModel, existing: Student?, onDone: () -> Unit) 
         Field(roll, { roll = it }, "রোল")
         Field(session, { session = it }, "সেশন")
         Field(section, { section = it }, "বিভাগ/শাখা")
-        Field(phone, { phone = it }, "মোবাইল নম্বর")
+        OutlinedTextField(
+            value = phone, onValueChange = { phone = it },
+            label = { Text("গার্ডিয়ানের মোবাইল নাম্বার") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "গার্ডিয়ান অ্যাপে OTP লগইনের জন্য এই নম্বরটি ব্যবহার হবে (মা অথবা বাবা — একটি নম্বর দিন)।",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = { photoPicker.launch("image/*") }, modifier = Modifier.fillMaxWidth()) {
             Text(if (photoUrl.isBlank()) "ছবি বেছে নিন (ঐচ্ছিক)" else "ছবি পরিবর্তন করুন")
         }
