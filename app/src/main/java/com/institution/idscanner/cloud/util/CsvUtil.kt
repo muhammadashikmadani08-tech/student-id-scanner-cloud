@@ -6,8 +6,12 @@ import java.io.InputStream
 import java.io.InputStreamReader
 
 /** CSV format (header row required):
- *  Student ID | Name | Father | Mother | Class | Roll | Session | Section | Phone
- *  Extra columns are ignored; missing columns default to empty. */
+ *  Student ID | Name | Father | Mother | Class | Roll | Session | Section | Phone | Email
+ *  The Email column is optional (9th column; header names Email,
+ *  guardianEmail or ইমেইল are accepted, in any position). Its value is
+ *  trimmed and lowercased and stored as Student.guardianEmail; an
+ *  empty Email leaves guardianEmail empty. Extra columns are ignored;
+ *  missing columns default to empty. */
 object CsvUtil {
     private fun split(line: String): List<String> {
         val out = mutableListOf<String>()
@@ -46,16 +50,17 @@ object CsvUtil {
                 roll = col(row, "roll"),
                 session = col(row, "session"),
                 section = col(row, "section", "division", "branch"),
-                phone = col(row, "phone", "mobile", "mobile number")
+                phone = col(row, "phone", "mobile", "mobile number"),
+                guardianEmail = col(row, "email", "guardianemail", "guardian email", "ইমেইল").trim().lowercase()
             )
         }
     }
 
     fun toCsv(students: List<Student>): String {
-        val sb = StringBuilder("Student ID,Name,Father,Mother,Class,Roll,Session,Section,Phone\n")
+        val sb = StringBuilder("Student ID,Name,Father,Mother,Class,Roll,Session,Section,Phone,Email\n")
         students.forEach {
             sb.appendLine(
-                listOf(it.studentId, it.name, it.fatherName, it.motherName, it.className, it.roll, it.session, it.section, it.phone)
+                listOf(it.studentId, it.name, it.fatherName, it.motherName, it.className, it.roll, it.session, it.section, it.phone, it.guardianEmail)
                     .joinToString(",") { v -> "\"${v.replace("\"", "")}\"" }
             )
         }
