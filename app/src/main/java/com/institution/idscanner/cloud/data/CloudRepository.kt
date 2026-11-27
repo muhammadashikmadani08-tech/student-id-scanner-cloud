@@ -2,8 +2,10 @@ package com.institution.idscanner.cloud.data
 
 import android.content.Context
 import android.net.Uri
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.SetOptions
 import com.google.firebase.storage.FirebaseStorage
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -32,6 +34,8 @@ class CloudRepository(val uid: String) {
     private fun studentsRef() = userDoc().collection("students")
     private fun attendanceRef() = userDoc().collection("attendance")
     private fun historyRef() = userDoc().collection("history")
+    private fun holidaysRef() = userDoc().collection("holidays")
+    private fun guardianLinksRef() = userDoc().collection("guardianLinks")
     private fun profileRef() = userDoc().collection("settings").document("profile")
 
     val allStudents: Flow<List<Student>> = callbackFlow {
@@ -82,6 +86,13 @@ class CloudRepository(val uid: String) {
         awaitClose { reg.remove() }
     }
 
+    /** One-shot read of every attendance record (used by CSV export). */
+    suspend fun getAllAttendance(): List<AttendanceRecord> {
+        return attendanceRef().get().await().documents.mapNotNull { doc ->
+            doc.toObject(AttendanceRecord::class.java)?.also { it.id = doc.id }
+        }
+    }
+
     /** Normalises a scanned value (trims spaces, upper-cases) before lookup. */
     suspend fun findByScanned(raw: String): Student? {
         val id = raw.trim().uppercase()
@@ -127,21 +138,42 @@ class CloudRepository(val uid: String) {
                 ?: savePhotoLocally(student.studentId, newPhotoUri, context)
             if (url != null) toSave = student.copy(photoUrl = url)
         }
+        // Capture the previously stored phone BEFORE overwriting, so a
+        // phone change can move the guardian link (see below). A failed
+        // read must not block the save: fall back to "no previous phone"
+        // and still add the new link.
+        val previousPhone = runCatching { getStudent(toSave.studentId)?.phone }.getOrNull()
         studentsRef().document(toSave.studentId).set(toSave).await()
+        syncGuardianLinkOnSave(toSave, previousPhone)
         return toSave
     }
 
     suspend fun upsertAll(students: List<Student>) {
+        // Capture each student's previously stored phone BEFORE the
+        // batch overwrites, so phone changes move the guardian links.
+        // A failed read must not block the import: that student is then
+        // treated as new (its new link is still added).
+        val withPrevious = students.map { student ->
+            student to runCatching { getStudent(student.studentId)?.phone }.getOrNull()
+        }
         // WriteBatch caps at 500 writes; chunk larger imports.
-        students.chunked(400).forEach { chunk ->
+        withPrevious.chunked(400).forEach { chunk ->
             val batch = db.batch()
-            chunk.forEach { batch.set(studentsRef().document(it.studentId), it) }
+            chunk.forEach { (student, _) -> batch.set(studentsRef().document(student.studentId), student) }
             batch.commit().await()
+        }
+        withPrevious.forEach { (student, previousPhone) ->
+            syncGuardianLinkOnSave(student, previousPhone)
         }
     }
 
     suspend fun delete(student: Student, context: Context? = null) {
+        // Use the stored phone (authoritative) when it can be read, so
+        // the guardian link is cleaned up even if the passed-in copy is
+        // stale; fall back to the passed-in phone.
+        val storedPhone = runCatching { getStudent(student.studentId)?.phone }.getOrNull()
         studentsRef().document(student.studentId).delete().await()
+        removeFromGuardianLink(normalizeGuardianPhone(storedPhone ?: student.phone), student.studentId)
         deletePhoto(student, context)
     }
 
@@ -226,6 +258,90 @@ class CloudRepository(val uid: String) {
         }
     }
 
+    // ---- Holidays ----
+
+    /** Live list of holidays, oldest date first. Document id = date. */
+    val holidays: Flow<List<Holiday>> = callbackFlow {
+        val reg = holidaysRef().orderBy("date").addSnapshotListener { snap, _ ->
+            val list = snap?.documents?.mapNotNull { doc ->
+                doc.toObject(Holiday::class.java)?.also {
+                    if (it.date.isBlank()) it.date = doc.id
+                }
+            }.orEmpty()
+            trySend(list)
+        }
+        awaitClose { reg.remove() }
+    }
+
+    /** Adds (or overwrites, for the same date) a holiday. The caller
+     *  validates that [holiday.date] is "yyyy-MM-dd" and the title is
+     *  non-blank; the date is stored both as document id and field. */
+    suspend fun addHoliday(holiday: Holiday) {
+        val date = holiday.date.trim()
+        holidaysRef().document(date).set(Holiday(date = date, title = holiday.title.trim())).await()
+    }
+
+    suspend fun deleteHoliday(date: String) {
+        holidaysRef().document(date.trim()).delete().await()
+    }
+
+    // ---- Guardian links (users/{uid}/guardianLinks/{E.164 phone}) ----
+    //
+    // Kept in sync with Student.phone by every save/delete path in this
+    // repository (upsert, upsertAll, delete, and the first-login seed in
+    // ensureProfile). No student, attendance or history schema changes:
+    // the link doc only mirrors {phone, studentIds[]}.
+
+    /**
+     * Keeps the guardian link(s) correct after a student save.
+     * [previousPhone] is the phone stored before this save (null for a
+     * new student): when it differs from the new phone, the student id
+     * is removed from the old phone's link and added to the new one.
+     * A blank new phone only removes the old link.
+     */
+    private suspend fun syncGuardianLinkOnSave(student: Student, previousPhone: String?) {
+        val oldPhone = normalizeGuardianPhone(previousPhone)
+        val newPhone = normalizeGuardianPhone(student.phone)
+        if (oldPhone != null && oldPhone != newPhone) {
+            removeFromGuardianLink(oldPhone, student.studentId)
+        }
+        if (newPhone != null) {
+            addToGuardianLink(newPhone, student.studentId)
+        }
+    }
+
+    /** Merges [studentId] into the link doc for [phone], creating the
+     *  doc ({phone, studentIds[]}) when it does not exist yet.
+     *  arrayUnion is idempotent, so re-saving the same student is safe. */
+    private suspend fun addToGuardianLink(phone: String, studentId: String) {
+        guardianLinksRef().document(phone).set(
+            mapOf(
+                "phone" to phone,
+                "studentIds" to FieldValue.arrayUnion(studentId)
+            ),
+            SetOptions.merge()
+        ).await()
+    }
+
+    /** Removes [studentId] from the link doc for [phone], deleting the
+     *  doc when its studentIds array becomes empty. A missing doc is
+     *  not an error (nothing to remove). */
+    private suspend fun removeFromGuardianLink(phone: String?, studentId: String) {
+        if (phone.isNullOrBlank()) return
+        val ref = guardianLinksRef().document(phone)
+        try {
+            ref.update("studentIds", FieldValue.arrayRemove(studentId)).await()
+        } catch (_: Exception) {
+            // No such link doc: nothing to remove.
+            return
+        }
+        val snap = ref.get().await()
+        val remaining = snap.get("studentIds") as? List<*>
+        if (!snap.exists() || remaining.isNullOrEmpty()) {
+            ref.delete().await()
+        }
+    }
+
     // ---- Profile (institution name + admin PIN, per user) ----
 
     val profile: Flow<UserProfile> = callbackFlow {
@@ -267,6 +383,20 @@ class CloudRepository(val uid: String) {
         val batch = db.batch()
         batch.set(profileRef(), UserProfile(email = email, seeded = true))
         demo.forEach { batch.set(studentsRef().document(it.studentId), it) }
+        // Seed guardian links for the demo students, grouped by phone,
+        // so the guardian app sees them from the first login.
+        demo.groupBy { normalizeGuardianPhone(it.phone) }.forEach { (phone, students) ->
+            if (phone != null) {
+                batch.set(
+                    guardianLinksRef().document(phone),
+                    mapOf(
+                        "phone" to phone,
+                        "studentIds" to FieldValue.arrayUnion(*students.map { it.studentId }.toTypedArray())
+                    ),
+                    SetOptions.merge()
+                )
+            }
+        }
         batch.commit().await()
     }
 
@@ -278,6 +408,21 @@ class CloudRepository(val uid: String) {
             val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
             fmt.timeZone = DHAKA
             return fmt.format(Date(millis))
+        }
+
+        /**
+         * Normalises a guardian phone number to E.164 for use as a
+         * guardianLinks document id and in the link's phone field.
+         * Returns null for a blank number. Spaces and dashes are
+         * stripped; a leading "01..." (Bangladeshi mobile) becomes
+         * "+8801..."; "+880..." is kept as-is; any other format is
+         * returned trimmed (and space/dash-stripped) as-is.
+         */
+        fun normalizeGuardianPhone(raw: String?): String? {
+            val cleaned = raw?.trim()?.replace(" ", "")?.replace("-", "") ?: return null
+            if (cleaned.isBlank()) return null
+            if (cleaned.startsWith("01")) return "+880" + cleaned.substring(1)
+            return cleaned
         }
     }
 }
