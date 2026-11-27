@@ -40,6 +40,7 @@ fun StudentFormScreen(vm: AppViewModel, existing: Student?, onDone: () -> Unit) 
     var session by remember { mutableStateOf(existing?.session ?: "") }
     var section by remember { mutableStateOf(existing?.section ?: "") }
     var phone by remember { mutableStateOf(existing?.phone ?: "") }
+    var guardianEmail by remember { mutableStateOf(existing?.guardianEmail ?: "") }
     var photoUrl by remember { mutableStateOf(existing?.photoUrl ?: "") }
     var pickedPhotoUri by remember { mutableStateOf<Uri?>(null) }
     var error by remember { mutableStateOf("") }
@@ -83,6 +84,18 @@ fun StudentFormScreen(vm: AppViewModel, existing: Student?, onDone: () -> Unit) 
             style = MaterialTheme.typography.bodySmall
         )
         Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = guardianEmail, onValueChange = { guardianEmail = it },
+            label = { Text("গার্ডিয়ানের ইমেইল (লগইনের জন্য)") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "মাদ্রাসা থেকে গার্ডিয়ানকে এই ইমেইল ও পাসওয়ার্ড দেওয়া হবে; গার্ডিয়ান অ্যাপে এই ইমেইল দিয়ে লগইন করবেন। খালি রাখা যাবে।",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = { photoPicker.launch("image/*") }, modifier = Modifier.fillMaxWidth()) {
             Text(if (photoUrl.isBlank()) "ছবি বেছে নিন (ঐচ্ছিক)" else "ছবি পরিবর্তন করুন")
         }
@@ -91,10 +104,31 @@ fun StudentFormScreen(vm: AppViewModel, existing: Student?, onDone: () -> Unit) 
         Button(
             onClick = {
                 if (id.isBlank() || name.isBlank()) { error = "Student ID ও নাম অবশ্যই দিতে হবে।"; return@Button }
+                // Guardian email is optional; when given it must be a
+                // plausible address: trimmed + lowercased, with "@" and
+                // a "." after the "@". An invalid value blocks the save
+                // so no broken email-keyed guardian link is created.
+                val normalisedEmail = guardianEmail.trim().lowercase()
+                val atIndex = normalisedEmail.indexOf("@")
+                val emailValid = normalisedEmail.isEmpty() ||
+                    (atIndex > 0 && normalisedEmail.indexOf(".", atIndex) > atIndex + 1)
+                if (!emailValid) { error = "সঠিক ইমেইল দিন (যেমন: example@gmail.com) অথবা খালি রাখুন।"; return@Button }
                 // Keep the existing cloud URL when no new photo was picked;
                 // a just-picked photo is uploaded by the ViewModel and its
                 // URL replaces the temporary picker Uri in the saved record.
-                val student = Student(id.trim(), name.trim(), father.trim(), mother.trim(), className.trim(), roll.trim(), session.trim(), section.trim(), phone.trim(), existing?.photoUrl ?: "")
+                val student = Student(
+                    studentId = id.trim(),
+                    name = name.trim(),
+                    fatherName = father.trim(),
+                    motherName = mother.trim(),
+                    className = className.trim(),
+                    roll = roll.trim(),
+                    session = session.trim(),
+                    section = section.trim(),
+                    phone = phone.trim(),
+                    photoUrl = existing?.photoUrl ?: "",
+                    guardianEmail = normalisedEmail
+                )
                 vm.saveStudent(student, pickedPhotoUri)
                 onDone()
             },
