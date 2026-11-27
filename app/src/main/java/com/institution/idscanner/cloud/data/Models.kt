@@ -13,6 +13,8 @@ import com.google.firebase.firestore.Exclude
  *   users/{uid}/attendance/{studentId_yyyy-MM-dd}
  *   users/{uid}/history/{autoId}
  *   users/{uid}/settings/profile
+ *   users/{uid}/holidays/{yyyy-MM-dd}
+ *   users/{uid}/guardianLinks/{E.164 phone}
  */
 data class Student(
     var studentId: String = "",
@@ -58,4 +60,28 @@ data class UserProfile(
     /** True once the first-login demo students have been seeded. */
     var seeded: Boolean = false,
     var email: String = ""
+)
+
+/**
+ * One holiday. Stored at users/{uid}/holidays/{date}, where [date] is
+ * "yyyy-MM-dd" (Asia/Dhaka) and is also the document id. [title] is the
+ * holiday's name/reason, e.g. "ঈদুল ফিতর".
+ */
+data class Holiday(
+    var date: String = "",
+    var title: String = ""
+)
+
+/**
+ * Guardian-to-students link for the guardian app's OTP login. Stored at
+ * users/{uid}/guardianLinks/{phone}, where [phone] is the guardian's
+ * mobile number normalised to E.164 (see
+ * CloudRepository.normalizeGuardianPhone). [studentIds] lists every
+ * student whose guardian phone equals [phone]; the doc is deleted when
+ * the list becomes empty. The student documents themselves are
+ * unchanged — the phone still lives only on [Student.phone].
+ */
+data class GuardianLink(
+    var phone: String = "",
+    var studentIds: List<String> = emptyList()
 )
