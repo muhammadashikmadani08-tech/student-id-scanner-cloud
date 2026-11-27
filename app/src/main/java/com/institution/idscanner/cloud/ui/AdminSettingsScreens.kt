@@ -40,8 +40,16 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.institution.idscanner.cloud.AppViewModel
+import com.institution.idscanner.cloud.data.CloudRepository
+import com.institution.idscanner.cloud.data.Holiday
+import com.institution.idscanner.cloud.util.AttendanceCsv
 import com.institution.idscanner.cloud.util.CsvUtil
+import java.text.SimpleDateFormat
+import java.util.Locale
 import kotlinx.coroutines.launch
+
+/** UTF-8 byte-order mark, so Excel shows Bengali text correctly. */
+private val UTF8_BOM = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())
 
 @Composable
 fun AdminScreen(
@@ -73,6 +81,30 @@ fun AdminScreen(
                     it.write(CsvUtil.toCsv(students).toByteArray(Charsets.UTF_8))
                 }
                 message = "CSV export সম্পন্ন হয়েছে।"
+            }.onFailure { message = "Export ব্যর্থ: ${it.message}" }
+        }
+    }
+    val dayAttendanceExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri: Uri? ->
+        if (uri != null) scope.launch {
+            runCatching {
+                val csv = AttendanceCsv.dayCsv(students, vm.getAllAttendance())
+                context.contentResolver.openOutputStream(uri)?.use {
+                    it.write(UTF8_BOM)
+                    it.write(csv.toByteArray(Charsets.UTF_8))
+                }
+                message = "আজকের হাজিরা export সম্পন্ন হয়েছে।"
+            }.onFailure { message = "Export ব্যর্থ: ${it.message}" }
+        }
+    }
+    val weekAttendanceExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri: Uri? ->
+        if (uri != null) scope.launch {
+            runCatching {
+                val csv = AttendanceCsv.weekCsv(students, vm.getAllAttendance())
+                context.contentResolver.openOutputStream(uri)?.use {
+                    it.write(UTF8_BOM)
+                    it.write(csv.toByteArray(Charsets.UTF_8))
+                }
+                message = "সাপ্তাহিক হাজিরা export সম্পন্ন হয়েছে।"
             }.onFailure { message = "Export ব্যর্থ: ${it.message}" }
         }
     }
@@ -109,6 +141,14 @@ fun AdminScreen(
                 Text("CSV-এ Export করুন")
             }
             Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = { dayAttendanceExportLauncher.launch("attendance-${CloudRepository.dateString()}.csv") }, modifier = Modifier.fillMaxWidth()) {
+                Text("আজকের হাজিরা Export করুন (CSV)")
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = { weekAttendanceExportLauncher.launch("attendance-week-${AttendanceCsv.weekStartDate()}.csv") }, modifier = Modifier.fillMaxWidth()) {
+                Text("সাপ্তাহিক হাজিরা Export করুন (CSV)")
+            }
+            Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = onSettings, modifier = Modifier.fillMaxWidth()) {
                 Text("প্রতিষ্ঠানের নাম ও PIN পরিবর্তন করুন")
             }
@@ -124,10 +164,17 @@ fun AdminScreen(
 
 @Composable
 fun SettingsScreen(vm: AppViewModel, onDone: () -> Unit) {
+    // PIN-gated: this screen is only reachable from AdminScreen, after
+    // the Admin PIN has been entered (see AppNav "settings" route).
     val institutionName by vm.institutionName.collectAsState()
     val pin by vm.adminPin.collectAsState()
     val signedInEmail by vm.currentUserEmail.collectAsState()
     val logoPath by vm.logoPath.collectAsState()
+    val holidays by vm.holidays.collectAsState()
+    val scope = rememberCoroutineScope()
+    var holidayDate by remember { mutableStateOf("") }
+    var holidayTitle by remember { mutableStateOf("") }
+    var holidayMessage by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
     var newPin by remember { mutableStateOf("") }
     var first by remember { mutableStateOf(true) }
@@ -191,6 +238,70 @@ fun SettingsScreen(vm: AppViewModel, onDone: () -> Unit) {
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
             visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth()
         )
+        Spacer(Modifier.height(16.dp))
+        Text("ছুটির দিনের তালিকা", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "ছুটির দিনগুলো এখানে যোগ করুন। একই তারিখে আবার যোগ করলে আগের ছুটির নাম বদলে যাবে।",
+            style = MaterialTheme.typography.bodyMedium
+        )
+        Spacer(Modifier.height(8.dp))
+        if (holidays.isEmpty()) {
+            Text("কোনো ছুটির দিন যোগ করা হয়নি।", style = MaterialTheme.typography.bodyMedium)
+        } else {
+            holidays.forEach { holiday ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "${holiday.date} — ${holiday.title}",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                runCatching { vm.deleteHoliday(holiday.date) }
+                                    .onFailure { holidayMessage = "মুছতে ব্যর্থ: ${it.message}" }
+                            }
+                        }
+                    ) { Text("মুছুন") }
+                }
+                Spacer(Modifier.height(4.dp))
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = holidayDate, onValueChange = { holidayDate = it },
+            label = { Text("তারিখ (yyyy-MM-dd)") }, modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(4.dp))
+        Text("যেমন: 2026-12-25", style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = holidayTitle, onValueChange = { holidayTitle = it },
+            label = { Text("ছুটির নাম/কারণ") }, modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = {
+                val date = holidayDate.trim()
+                val title = holidayTitle.trim()
+                when {
+                    !isValidHolidayDate(date) -> holidayMessage = "সঠিক তারিখ দিন (yyyy-MM-dd, যেমন: 2026-12-25)।"
+                    title.isBlank() -> holidayMessage = "ছুটির নাম/কারণ দিতে হবে।"
+                    else -> {
+                        vm.addHoliday(Holiday(date = date, title = title))
+                        holidayDate = ""
+                        holidayTitle = ""
+                        holidayMessage = "ছুটি যোগ করা হয়েছে।"
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("ছুটি যোগ করুন") }
+        if (holidayMessage.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text(holidayMessage, style = MaterialTheme.typography.bodyMedium)
+        }
         Spacer(Modifier.height(14.dp))
         Button(
             onClick = {
@@ -210,5 +321,15 @@ fun SettingsScreen(vm: AppViewModel, onDone: () -> Unit) {
             "লগআউট করলে ফোনের ডাটা মুছে যায় না — আবার লগইন করলে ক্লাউড থেকে সব ফিরে আসবে।",
             style = MaterialTheme.typography.bodyMedium
         )
+    }
+}
+
+/** True only for a real calendar date written as yyyy-MM-dd. */
+private fun isValidHolidayDate(value: String): Boolean {
+    if (!Regex("^\\d{4}-\\d{2}-\\d{2}$").matches(value)) return false
+    return try {
+        SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { isLenient = false }.parse(value) != null
+    } catch (_: Exception) {
+        false
     }
 }
