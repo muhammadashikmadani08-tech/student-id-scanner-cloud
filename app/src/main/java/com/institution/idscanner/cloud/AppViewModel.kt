@@ -10,6 +10,7 @@ import com.institution.idscanner.cloud.data.CloudRepository
 import com.institution.idscanner.cloud.data.CloudSettings
 import com.institution.idscanner.cloud.data.ScanHistory
 import com.institution.idscanner.cloud.data.Student
+import com.institution.idscanner.cloud.util.LogoStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -39,6 +40,33 @@ class AppViewModel(
         .map { it?.email.orEmpty() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), auth.email.orEmpty())
 
+    /** Firebase UID of the signed-in account (the per-account logo key). */
+    val accountUid: String get() = auth.uid.orEmpty()
+
+    /** Absolute path of this account's saved logo (LogoStore), or null. */
+    private val _logoPath = MutableStateFlow<String?>(null)
+    val logoPath: StateFlow<String?> = _logoPath
+
+    init {
+        refreshLogo()
+    }
+
+    private fun refreshLogo() {
+        _logoPath.value = LogoStore.logoPath(context, accountUid)
+    }
+
+    /** Copies a picked image into internal storage as this account's logo. */
+    fun saveLogo(uri: Uri) = viewModelScope.launch {
+        val saved = LogoStore.saveLogo(context, accountUid, uri)
+        if (saved != null) _logoPath.value = saved
+    }
+
+    /** Removes this account's logo (default icon is used afterwards). */
+    fun clearLogo() = viewModelScope.launch {
+        LogoStore.clearLogo(context, accountUid)
+        _logoPath.value = null
+    }
+
     /** Attendance records for one student, oldest first. */
     fun attendanceFor(studentId: String): Flow<List<AttendanceRecord>> =
         repo.attendanceFor(studentId)
@@ -59,10 +87,11 @@ class AppViewModel(
     }
 
     /** Returns the student (or null). On a hit, records both the scan
-     *  history entry and today's attendance. */
-    suspend fun lookupScanned(raw: String): Student? {
+     *  history entry and today's attendance — unless [record] is false
+     *  (info-only scan mode), in which case NOTHING is written. */
+    suspend fun lookupScanned(raw: String, record: Boolean = true): Student? {
         val student = repo.findByScanned(raw)
-        if (student != null) {
+        if (student != null && record) {
             repo.recordScan(student.studentId)
             repo.markAttendance(student.studentId)
         }
