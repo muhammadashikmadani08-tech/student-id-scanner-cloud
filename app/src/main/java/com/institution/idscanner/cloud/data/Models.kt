@@ -15,6 +15,7 @@ import com.google.firebase.firestore.Exclude
  *   users/{uid}/settings/profile
  *   users/{uid}/holidays/{yyyy-MM-dd}
  *   users/{uid}/guardianLinks/{E.164 phone}
+ *   users/{uid}/guardianLinks/{guardian email, lowercased}
  */
 data class Student(
     var studentId: String = "",
@@ -29,7 +30,18 @@ data class Student(
     /** Photo location: a Firebase Storage download URL, or (in this
      *  build, where Storage is not enabled) an absolute local file path
      *  on this phone only — or empty. */
-    var photoUrl: String = ""
+    var photoUrl: String = "",
+    /**
+     * Guardian's email for email-based guardian-app login. Stored in
+     * Firestore under the field name `guardianEmail`, always trimmed
+     * and lowercased when entered (see the student form / CSV import).
+     * Empty means no email login for this student. Kept last so every
+     * existing positional Student(...) construction keeps working.
+     * CloudRepository mirrors a non-empty value into an email-keyed
+     * guardianLinks doc (see GuardianLink.email); pre-existing
+     * students gain that link only when next saved/edited/imported.
+     */
+    var guardianEmail: String = ""
 )
 
 data class ScanHistory(
@@ -80,8 +92,18 @@ data class Holiday(
  * student whose guardian phone equals [phone]; the doc is deleted when
  * the list becomes empty. The student documents themselves are
  * unchanged — the phone still lives only on [Student.phone].
+ *
+ * The same collection also holds email-keyed links for email-based
+ * guardian login: doc id = the guardian's lowercased, trimmed email,
+ * with [email] set to that value, [phone] holding the guardian phone
+ * when one is known, and [studentIds] listing every student whose
+ * [Student.guardianEmail] equals [email]. Phone-keyed docs have an
+ * empty [email]; email-keyed docs are written in addition to (never
+ * instead of) the phone-keyed doc.
  */
 data class GuardianLink(
     var phone: String = "",
-    var studentIds: List<String> = emptyList()
+    var studentIds: List<String> = emptyList(),
+    /** Guardian email (lowercased, trimmed) for email-keyed docs; empty on phone-keyed docs. */
+    var email: String = ""
 )
