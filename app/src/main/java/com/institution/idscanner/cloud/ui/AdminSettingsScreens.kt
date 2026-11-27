@@ -4,7 +4,17 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material3.Icon
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -117,10 +127,14 @@ fun SettingsScreen(vm: AppViewModel, onDone: () -> Unit) {
     val institutionName by vm.institutionName.collectAsState()
     val pin by vm.adminPin.collectAsState()
     val signedInEmail by vm.currentUserEmail.collectAsState()
+    val logoPath by vm.logoPath.collectAsState()
     var name by remember { mutableStateOf("") }
     var newPin by remember { mutableStateOf("") }
     var first by remember { mutableStateOf(true) }
     if (first && institutionName.isNotBlank()) { name = institutionName; first = false }
+    val logoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        if (uri != null) vm.saveLogo(uri)
+    }
 
     Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
         Text("Settings", style = MaterialTheme.typography.headlineMedium)
@@ -137,9 +151,38 @@ fun SettingsScreen(vm: AppViewModel, onDone: () -> Unit) {
             style = MaterialTheme.typography.bodyMedium
         )
         Spacer(Modifier.height(16.dp))
-        Text("প্রতিষ্ঠানের নাম (Home Screen-এ দেখাবে; Logo বদলাতে res/drawable-এর আইকন বদলান — README দেখুন)।")
+        Text("প্রতিষ্ঠানের নাম (ওয়েলকাম পেইজ ও Home Screen-এ দেখাবে)।")
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("প্রতিষ্ঠানের নাম") }, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(16.dp))
+        Text("প্রতিষ্ঠানের লোগো (ওয়েলকাম পেইজে দেখাবে)।")
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (!logoPath.isNullOrBlank()) {
+                AsyncImage(
+                    model = photoModel(logoPath!!), contentDescription = "বর্তমান লোগো",
+                    modifier = Modifier.size(72.dp).clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Icon(
+                    Icons.Filled.QrCodeScanner, contentDescription = null,
+                    modifier = Modifier.size(72.dp), tint = MaterialTheme.colorScheme.primary
+                )
+            }
+            Column(Modifier.padding(start = 12.dp)) {
+                OutlinedButton(onClick = { logoPicker.launch("image/*") }) { Text("লোগো বদলান") }
+                if (!logoPath.isNullOrBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedButton(onClick = { vm.clearLogo() }) { Text("লোগো মুছুন") }
+                }
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "লোগো শুধু এই ফোনে দেখাবে — অন্য ফোনে যাবে না। নাম বদলালে সব ফোনে বদলাবে।",
+            style = MaterialTheme.typography.bodyMedium
+        )
         Spacer(Modifier.height(12.dp))
         Text("বর্তমান Admin PIN: $pin")
         Spacer(Modifier.height(8.dp))
