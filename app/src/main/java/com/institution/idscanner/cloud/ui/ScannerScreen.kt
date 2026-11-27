@@ -72,8 +72,15 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 
+/** Scan modes: "attendance" records attendance + history automatically and
+ *  auto-resumes with no button press; "info" only shows the student info
+ *  card and writes nothing. */
+const val SCAN_MODE_ATTENDANCE = "attendance"
+const val SCAN_MODE_INFO = "info"
+
 @Composable
-fun ScannerScreen(vm: AppViewModel, onProfile: (String) -> Unit) {
+fun ScannerScreen(vm: AppViewModel, mode: String = SCAN_MODE_ATTENDANCE, onProfile: (String) -> Unit) {
+    val isAttendanceMode = mode == SCAN_MODE_ATTENDANCE
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -126,14 +133,32 @@ fun ScannerScreen(vm: AppViewModel, onProfile: (String) -> Unit) {
     var cameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
 
     fun handleRaw(raw: String) {
-        if (busy) return
+        // Ignore analyzer callbacks while a result is showing: the result
+        // auto-clears in attendance mode, and the manual button clears it
+        // in info mode. Without this guard the analyzer would re-fire on
+        // the same card while the thank-you screen is up.
+        if (busy || !scanning) return
         busy = true
         scope.launch {
-            val student = vm.lookupScanned(raw)
+            // Info mode must not write attendance or history.
+            val student = vm.lookupScanned(raw, record = isAttendanceMode)
             scanTimeMillis = System.currentTimeMillis()
             busy = false
             scanning = false
             if (student != null) found = student else notFoundId = raw
+        }
+    }
+
+    // Attendance mode: auto-resume scanning ~3 seconds after a result
+    // (found or not-found) so nobody has to stand at the phone.
+    LaunchedEffect(found, notFoundId) {
+        if (isAttendanceMode && (found != null || notFoundId != null)) {
+            delay(3000)
+            found = null
+            notFoundId = null
+            ocrText = ""
+            scanTimeMillis = null
+            scanning = true
         }
     }
 
@@ -174,6 +199,12 @@ fun ScannerScreen(vm: AppViewModel, onProfile: (String) -> Unit) {
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Text("Scan Student ID", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            if (isAttendanceMode) "হাজিরা স্ক্যান — স্ক্যান করলেই হাজিরা হবে, কাউকে থাকতে হবে না।"
+            else "তথ্য দেখুন — শুধু তথ্য দেখাবে, হাজিরা হবে না।",
+            style = MaterialTheme.typography.bodyMedium
+        )
         Spacer(Modifier.height(4.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(9.dp).background(Color(0xFFE53935), CircleShape))
@@ -281,14 +312,33 @@ fun ScannerScreen(vm: AppViewModel, onProfile: (String) -> Unit) {
                 Text("ID দিয়ে খুঁজুন")
             }
         } else if (found != null) {
-            StudentDetailCard(found!!, institutionName, scanTimeMillis = scanTimeMillis, scanTimeFormat = resultFmt)
-            Spacer(Modifier.height(10.dp))
-            Button(onClick = { onProfile(found!!.studentId) }, modifier = Modifier.fillMaxWidth()) {
-                Text("Full Profile দেখুন")
-            }
-            Spacer(Modifier.height(8.dp))
-            OutlinedButton(onClick = { found = null; scanTimeMillis = null; scanning = true }, modifier = Modifier.fillMaxWidth()) {
-                Text("আবার Scan করুন")
+            if (isAttendanceMode) {
+                // Attendance mode: thank-you only, no info card. Auto-resume
+                // is handled by the LaunchedEffect above — no button press.
+                Spacer(Modifier.height(24.dp))
+                Text(
+                    "ধন্যবাদ আপনার হাজিরা সম্পূর্ণ",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(found!!.name, style = MaterialTheme.typography.headlineSmall)
+                Spacer(Modifier.height(8.dp))
+                scanTimeMillis?.let {
+                    Text("স্ক্যানের সময়: ${resultFmt.format(Date(it))}", style = MaterialTheme.typography.bodyLarge)
+                }
+                Spacer(Modifier.height(12.dp))
+                Text("পরের কার্ডের জন্য তৈরি হচ্ছে…", style = MaterialTheme.typography.bodyMedium)
+            } else {
+                StudentDetailCard(found!!, institutionName, scanTimeMillis = scanTimeMillis, scanTimeFormat = resultFmt)
+                Spacer(Modifier.height(10.dp))
+                Button(onClick = { onProfile(found!!.studentId) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Full Profile দেখুন")
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = { found = null; scanTimeMillis = null; scanning = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text("আবার Scan করুন")
+                }
             }
         } else {
             Text("Student Not Found", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.error)
@@ -298,13 +348,19 @@ fun ScannerScreen(vm: AppViewModel, onProfile: (String) -> Unit) {
                 Text("স্ক্যানের সময়: ${resultFmt.format(Date(it))}", style = MaterialTheme.typography.bodyMedium)
             }
             if (ocrText.isNotBlank()) Text("OCR পড়েছে: $ocrText", style = MaterialTheme.typography.bodySmall)
-            Spacer(Modifier.height(12.dp))
-            Button(onClick = { notFoundId = null; ocrText = ""; scanTimeMillis = null; scanning = true }, modifier = Modifier.fillMaxWidth()) {
-                Text("পুনরায় Scan করুন")
-            }
-            Spacer(Modifier.height(8.dp))
-            OutlinedButton(onClick = { onProfile("") }, modifier = Modifier.fillMaxWidth()) {
-                Text("Search-এ যান")
+            if (!isAttendanceMode) {
+                // Info mode only: manual rescan. Attendance mode auto-resumes.
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = { notFoundId = null; ocrText = ""; scanTimeMillis = null; scanning = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text("পুনরায় Scan করুন")
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = { onProfile("") }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Search-এ যান")
+                }
+            } else {
+                Spacer(Modifier.height(12.dp))
+                Text("পরের কার্ডের জন্য তৈরি হচ্ছে…", style = MaterialTheme.typography.bodyMedium)
             }
         }
     }
