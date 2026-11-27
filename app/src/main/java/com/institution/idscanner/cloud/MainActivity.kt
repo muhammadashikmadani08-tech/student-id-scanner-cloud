@@ -3,9 +3,12 @@ package com.institution.idscanner.cloud
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -18,7 +21,10 @@ import com.institution.idscanner.cloud.data.CloudRepository
 import com.institution.idscanner.cloud.data.CloudSettings
 import com.institution.idscanner.cloud.ui.AppNav
 import com.institution.idscanner.cloud.ui.LoginScreen
+import com.institution.idscanner.cloud.ui.SplashScreen
 import com.institution.idscanner.cloud.ui.theme.StudentIDScannerTheme
+import com.institution.idscanner.cloud.util.LogoStore
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -32,9 +38,27 @@ class MainActivity : ComponentActivity() {
         configureFirestore()
         setContent {
             StudentIDScannerTheme {
+                // Welcome screen: shown first on every cold start for a
+                // fixed ~2.5s, then the login/home flow takes over. The
+                // system splash (installSplashScreen above) still covers
+                // the very first paint; this is the branded welcome page.
+                var showSplash by remember { mutableStateOf(true) }
+                LaunchedEffect(Unit) {
+                    delay(2500)
+                    showSplash = false
+                }
                 val user by auth.currentUser.collectAsState()
                 if (user == null) {
-                    LoginScreen(auth)
+                    if (showSplash) {
+                        // Not signed in: no profile is available, so show
+                        // the default name and the last account's logo.
+                        val lastLogo = remember {
+                            LogoStore.logoPath(this@MainActivity, LogoStore.lastUid(this@MainActivity))
+                        }
+                        SplashScreen("আপনার প্রতিষ্ঠানের নাম", lastLogo)
+                    } else {
+                        LoginScreen(auth)
+                    }
                 } else {
                     val uid = user!!.uid
                     // First-login setup runs once per user; the repository
@@ -56,7 +80,15 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     val vm: AppViewModel = viewModel(factory = factory)
-                    AppNav(vm)
+                    LaunchedEffect(uid) { LogoStore.setLastUid(this@MainActivity, uid) }
+                    if (showSplash) {
+                        // Live profile name + this account's saved logo.
+                        val splashName by vm.institutionName.collectAsState()
+                        val splashLogo by vm.logoPath.collectAsState()
+                        SplashScreen(splashName, splashLogo)
+                    } else {
+                        AppNav(vm)
+                    }
                 }
             }
         }
