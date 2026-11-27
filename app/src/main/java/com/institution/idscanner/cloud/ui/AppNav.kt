@@ -45,8 +45,16 @@ fun AppNav(vm: AppViewModel) {
     ) { pad ->
         NavHost(nav, startDestination = "home", modifier = Modifier.padding(pad)) {
             composable("home") { HomeScreen(vm) { nav.navigate(it) } }
+            // Plain "scanner" kept for backward compatibility (defaults to attendance mode).
             composable("scanner") {
-                ScannerScreen(vm) { id -> if (id.isNotBlank()) nav.navigate("profile/$id") else nav.navigate("search") }
+                ScannerScreen(vm, SCAN_MODE_ATTENDANCE) { id -> if (id.isNotBlank()) nav.navigate("profile/$id") else nav.navigate("search") }
+            }
+            composable(
+                "scanner/{mode}",
+                arguments = listOf(navArgument("mode") { type = NavType.StringType; defaultValue = SCAN_MODE_ATTENDANCE })
+            ) { entry ->
+                val scanMode = entry.arguments?.getString("mode") ?: SCAN_MODE_ATTENDANCE
+                ScannerScreen(vm, scanMode) { id -> if (id.isNotBlank()) nav.navigate("profile/$id") else nav.navigate("search") }
             }
             composable("search") { SearchScreen(vm) { nav.navigate("profile/$it") } }
             composable("students") {
