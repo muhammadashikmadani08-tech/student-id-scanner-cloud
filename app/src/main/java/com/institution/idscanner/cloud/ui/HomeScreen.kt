@@ -46,12 +46,20 @@ fun HomeScreen(vm: AppViewModel, onNavigate: (String) -> Unit) {
         Text("Student ID Card Scanner", style = MaterialTheme.typography.bodyLarge)
         Spacer(Modifier.height(28.dp))
         Button(
-            onClick = { onNavigate("scanner") },
+            onClick = { onNavigate("scanner/$SCAN_MODE_ATTENDANCE") },
             modifier = Modifier.fillMaxWidth().height(64.dp)
         ) {
             Icon(Icons.Filled.QrCodeScanner, contentDescription = null)
             Spacer(Modifier.height(0.dp))
-            Text("  Scan Student ID", style = MaterialTheme.typography.titleLarge)
+            Text("  হাজিরা স্ক্যান", style = MaterialTheme.typography.titleLarge)
+        }
+        Spacer(Modifier.height(10.dp))
+        OutlinedButton(
+            onClick = { onNavigate("scanner/$SCAN_MODE_INFO") },
+            modifier = Modifier.fillMaxWidth().height(56.dp)
+        ) {
+            Icon(Icons.Filled.QrCodeScanner, contentDescription = null)
+            Text("  তথ্য দেখুন (শুধু তথ্য, হাজিরা হবে না)")
         }
         Spacer(Modifier.height(16.dp))
         OutlinedButton(onClick = { onNavigate("search") }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
